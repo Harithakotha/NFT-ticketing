@@ -1,53 +1,57 @@
 import { algo, AlgorandClient } from '@algorandfoundation/algokit-utils'
 import { useWallet } from '@txnlab/use-wallet-react'
 import { useSnackbar } from 'notistack'
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { getAlgodConfigFromViteEnvironment } from '../utils/network/getAlgoClientConfigs'
 import algosdk from 'algosdk'
 
-interface TransactInterface {
+interface TransactProps {
   openModal: boolean
   setModalState: (value: boolean) => void
 }
 
-const Transact = ({ openModal, setModalState }: TransactInterface) => {
-  const [loading, setLoading] = useState<boolean>(false)
-  const [receiverAddress, setReceiverAddress] = useState<string>('')
-  const [useManualSigner, setUseManualSigner] = useState<boolean>(false)
-  const [mnemonic, setMnemonic] = useState<string>('')
-
-  const algodConfig = getAlgodConfigFromViteEnvironment()
-  const algorand = AlgorandClient.fromConfig({ algodConfig })
+const Transact = ({ openModal, setModalState }: TransactProps) => {
+  const [loading, setLoading] = useState(false)
+  const [receiverAddress, setReceiverAddress] = useState('')
+  const [useManualSigner, setUseManualSigner] = useState(false)
+  const [mnemonic, setMnemonic] = useState('')
 
   const { enqueueSnackbar } = useSnackbar()
-
   const { transactionSigner, activeAddress } = useWallet()
 
-  const handleSubmitAlgo = async () => {
-    if (receiverAddress.length !== 58) {
+  // Memoized Algorand client
+  const algorand = useMemo(() => {
+    const algodConfig = getAlgodConfigFromViteEnvironment()
+    return AlgorandClient.fromConfig({ algodConfig })
+  }, [])
+
+  const isValidReceiver = receiverAddress.length === 58
+  const isManualSignerValid = !useManualSigner || (mnemonic.trim().split(' ').length === 25)
+
+  const handleSubmit = async () => {
+    if (!isValidReceiver) {
       enqueueSnackbar('Invalid receiver address', { variant: 'warning' })
       return
     }
+    if (!activeAddress && !useManualSigner) {
+      enqueueSnackbar('Please connect your wallet first', { variant: 'warning' })
+      return
+    }
+    if (!isManualSignerValid) {
+      enqueueSnackbar('Mnemonic must have 25 words', { variant: 'warning' })
+      return
+    }
 
-    let signerToUse: any = transactionSigner
-    let senderToUse: string = activeAddress?.toString() || ''
+    let signer = transactionSigner
+    let sender = activeAddress || ''
 
     if (useManualSigner) {
-      if (!mnemonic) {
-        enqueueSnackbar('Please provide a mnemonic for manual signing', { variant: 'warning' })
-        return
-      }
       try {
-        const account = algosdk.mnemonicToSecretKey(mnemonic)
-        signerToUse = algosdk.makeBasicAccountTransactionSigner(account)
-        senderToUse = account.addr
-      } catch (e) {
+        const account = algosdk.mnemonicToSecretKey(mnemonic.trim())
+        signer = algosdk.makeBasicAccountTransactionSigner(account)
+        sender = account.addr
+      } catch {
         enqueueSnackbar('Invalid mnemonic', { variant: 'error' })
-        return
-      }
-    } else {
-      if (!transactionSigner || !activeAddress) {
-        enqueueSnackbar('Please connect wallet first', { variant: 'warning' })
         return
       }
     }
@@ -56,38 +60,32 @@ const Transact = ({ openModal, setModalState }: TransactInterface) => {
     try {
       enqueueSnackbar('Sending transaction...', { variant: 'info' })
       const result = await algorand.send.payment({
-        signer: signerToUse,
-        sender: senderToUse,
+        signer,
+        sender,
         receiver: receiverAddress,
         amount: algo(1),
       })
-
       enqueueSnackbar(`Transaction sent: ${result.txIds[0]}`, { variant: 'success' })
       setReceiverAddress('')
-      if (useManualSigner) setMnemonic('')
+      setMnemonic('')
       setModalState(false)
     } catch (e: any) {
       console.error('Transaction error', e)
-      enqueueSnackbar(`Failed to send transaction: ${e.message || e}`, { variant: 'error' })
+      enqueueSnackbar(`Failed to send transaction: ${e?.message || e}`, { variant: 'error' })
     } finally {
       setLoading(false)
     }
   }
 
   return (
-    <dialog
-      id="transact_modal"
-      className={`modal ${openModal ? 'modal-open' : ''} bg-slate-200`}
-      style={{ display: openModal ? 'block' : 'none' }}
-    >
+    <dialog className={`modal ${openModal ? 'modal-open' : ''}`} open={openModal}>
       <form method="dialog" className="modal-box" onSubmit={(e) => e.preventDefault()}>
-        <h3 className="font-bold text-lg">Send payment transaction</h3>
-        <br />
-        <div className="form-control">
-          <label className="label">
-            <span className="label-text">Signer Type</span>
-          </label>
-          <div className="flex items-center space-x-4">
+        <h3 className="font-bold text-lg mb-4">Send Payment Transaction</h3>
+
+        {/* Signer type */}
+        <div className="form-control mb-4">
+          <label className="label"><span className="label-text">Signer Type</span></label>
+          <div className="flex items-center gap-4">
             <label className="flex items-center">
               <input
                 type="radio"
@@ -110,11 +108,11 @@ const Transact = ({ openModal, setModalState }: TransactInterface) => {
             </label>
           </div>
         </div>
+
+        {/* Manual mnemonic input */}
         {useManualSigner && (
-          <div className="form-control">
-            <label className="label">
-              <span className="label-text">Mnemonic (25 words)</span>
-            </label>
+          <div className="form-control mb-4">
+            <label className="label"><span className="label-text">Mnemonic (25 words)</span></label>
             <textarea
               placeholder="Enter your 25-word mnemonic phrase"
               className="textarea textarea-bordered w-full"
@@ -123,39 +121,38 @@ const Transact = ({ openModal, setModalState }: TransactInterface) => {
               rows={3}
             />
             <p className="text-xs text-red-500 mt-1">
-              ⚠️ Warning: Using mnemonic in frontend is insecure. This is for demo purposes only.
+              ⚠️ Using mnemonic in frontend is insecure. For demo only.
             </p>
           </div>
         )}
-        <div className="form-control">
-          <label className="label">
-            <span className="label-text">Receiver Address</span>
-          </label>
+
+        {/* Receiver input */}
+        <div className="form-control mb-4">
+          <label className="label"><span className="label-text">Receiver Address</span></label>
           <input
             type="text"
-            data-test-id="receiver-address"
-            placeholder="Provide wallet address"
+            placeholder="Algorand address"
             className="input input-bordered w-full"
             value={receiverAddress}
             onChange={(e) => setReceiverAddress(e.target.value)}
           />
+          {!isValidReceiver && receiverAddress.length > 0 && (
+            <span className="text-xs text-red-500 mt-1">Address must be 58 characters long</span>
+          )}
         </div>
-        <div className="modal-action grid gap-2">
-          <button
-            type="button"
-            className="btn"
-            onClick={() => setModalState(false)}
-          >
+
+        {/* Action buttons */}
+        <div className="modal-action flex justify-end gap-2">
+          <button type="button" className="btn" onClick={() => setModalState(false)} disabled={loading}>
             Close
           </button>
           <button
             type="button"
-            data-test-id="send-algo"
-            className={`btn ${receiverAddress.length === 58 ? '' : 'btn-disabled'}`}
-            disabled={loading || receiverAddress.length !== 58}
-            onClick={handleSubmitAlgo}
+            className={`btn btn-primary ${loading ? 'loading' : ''}`}
+            onClick={handleSubmit}
+            disabled={loading || !isValidReceiver || !isManualSignerValid}
           >
-            {loading ? <span className="loading loading-spinner" /> : 'Send 1 Algo'}
+            {loading ? 'Sending...' : 'Send 1 ALGO'}
           </button>
         </div>
       </form>

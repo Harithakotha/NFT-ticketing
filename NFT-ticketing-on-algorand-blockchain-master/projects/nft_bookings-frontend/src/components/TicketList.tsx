@@ -4,6 +4,8 @@ import { useSnackbar } from 'notistack'
 import { NftBookingsFactory } from '../contracts/NftBookings'
 import { getAlgodConfigFromViteEnvironment, getIndexerConfigFromViteEnvironment } from '../utils/network/getAlgoClientConfigs'
 import { AlgorandClient } from '@algorandfoundation/algokit-utils'
+import algosdk from 'algosdk'
+import { CONFIG } from '../config'
 
 interface Ticket {
   id: number
@@ -11,11 +13,9 @@ interface Ticket {
   date?: string
 }
 
-const APP_ID = 123456 // replace with your deployed app ID
-
 const TicketList: React.FC = () => {
   const [tickets, setTickets] = useState<Ticket[]>([])
-  const [loadingTickets, setLoadingTickets] = useState(false)
+  const [loading, setLoading] = useState(false)
 
   const { enqueueSnackbar } = useSnackbar()
   const { transactionSigner, activeAddress } = useWallet()
@@ -23,53 +23,95 @@ const TicketList: React.FC = () => {
   const algorand = useMemo(() => {
     const algodConfig = getAlgodConfigFromViteEnvironment()
     const indexerConfig = getIndexerConfigFromViteEnvironment()
-    return AlgorandClient.fromConfig({ algodConfig, indexerConfig })
+    const client = AlgorandClient.fromConfig({ algodConfig, indexerConfig })
+    if (transactionSigner) client.setDefaultSigner(transactionSigner)
+    return client
+  }, [transactionSigner])
+
+  const algodClient = useMemo(() => {
+    const cfg = getAlgodConfigFromViteEnvironment()
+    return new algosdk.Algodv2(cfg.token || '', cfg.server, cfg.port)
   }, [])
 
   const appFactory = useMemo(() => {
     if (!activeAddress || !transactionSigner) return null
-    algorand.setDefaultSigner(transactionSigner)
-    return new NftBookingsFactory(algorand, activeAddress, transactionSigner)
-  }, [algorand, activeAddress, transactionSigner])
+    return new NftBookingsFactory(algodClient, activeAddress, transactionSigner, CONFIG.IS_DEVELOPMENT)
+  }, [activeAddress, transactionSigner, algodClient])
 
   const getAppClient = useCallback(() => {
     if (!appFactory) throw new Error('Wallet not connected or factory not initialized')
-    return appFactory.getClient(APP_ID)
+    return appFactory.getClient(CONFIG.APP_ID)
   }, [appFactory])
 
   const fetchTickets = useCallback(async () => {
     if (!activeAddress || !transactionSigner) return
-    setLoadingTickets(true)
+    setLoading(true)
 
     try {
-      const appClient = getAppClient()
+      let fetchedTickets: Ticket[] = []
 
+      if (CONFIG.IS_DEVELOPMENT) {
+        const appClient = getAppClient()
+        const ticketIds = await appClient.getMyTickets()
 
+        const mockEvents = [
+          { name: "Summer Music Festival", date: "2024-07-15" },
+          { name: "Tech Conference 2024", date: "2024-08-20" },
+          { name: "Art Exhibition", date: "2024-09-10" },
+          { name: "Sports Championship", date: "2024-10-05" },
+          { name: "Comedy Show", date: "2024-11-12" }
+        ]
 
-      const response = await appClient.getMyTickets()
+        // Deduplicate and assign events
+        const uniqueIds = Array.from(new Set(ticketIds))
+        fetchedTickets = uniqueIds.map((id, idx) => ({
+          id,
+          eventName: mockEvents[idx % mockEvents.length].name,
+          date: mockEvents[idx % mockEvents.length].date
+        }))
+      } else {
+        const indexerCfg = getIndexerConfigFromViteEnvironment()
+        const indexerClient = new algosdk.Indexer(indexerCfg.token || '', indexerCfg.server, indexerCfg.port)
+        const accountInfo = await indexerClient.lookupAccountAssets(activeAddress).do()
 
-      const ticketIds: number[] = Array.isArray(response.returnValue)
-        ? (response.returnValue as number[])
-        : []
+        const ticketAssets = (accountInfo.assets || []).filter((asset: any) => {
+          const unitName = asset.asset?.params?.unitName || ''
+          return asset.amount === 1 && unitName.includes('TICKET')
+        })
 
-      const formattedTickets: Ticket[] = ticketIds.map((id) => ({
-        id,
-        eventName: `Event #${id}`, // optional fallback
-        date: new Date().toLocaleDateString() // optional placeholder
-      }))
-      setTickets(formattedTickets)
-    } catch (error: any) {
-      console.error('Failed to fetch tickets', error)
-      enqueueSnackbar(`Error fetching tickets: ${error.message || error}`, { variant: 'error' })
+        // Deduplicate by asset id
+        const uniqueAssets = Array.from(new Map(ticketAssets.map((a: any) => [a.asset.index, a])).values())
+        fetchedTickets = uniqueAssets.map((asset: any) => ({
+          id: asset.asset.index,
+          eventName: asset.asset.params.name || 'Unknown Event',
+          date: 'TBA'
+        }))
+      }
+
+      setTickets(fetchedTickets)
+    } catch (err: any) {
+      console.error('Error fetching tickets:', err)
+      const message = err instanceof Error ? err.message : 'Unknown error'
+      enqueueSnackbar(`Error fetching tickets: ${message}`, { variant: 'error' })
+      setTickets([])
     } finally {
-      setLoadingTickets(false)
+      setLoading(false)
     }
-  }, [activeAddress, transactionSigner, enqueueSnackbar, getAppClient])
-
-
+  }, [activeAddress, transactionSigner, getAppClient, enqueueSnackbar])
 
   useEffect(() => {
     fetchTickets()
+
+    // Listen for ticket refresh events
+    const handleRefreshTickets = () => {
+      fetchTickets()
+    }
+
+    window.addEventListener('refreshTickets', handleRefreshTickets)
+
+    return () => {
+      window.removeEventListener('refreshTickets', handleRefreshTickets)
+    }
   }, [fetchTickets])
 
   return (
@@ -77,8 +119,12 @@ const TicketList: React.FC = () => {
       <h2 className="text-3xl font-bold mb-6 text-center">My Tickets</h2>
 
       <div className="flex justify-center mb-6">
-        <button className="btn btn-secondary" onClick={fetchTickets} disabled={loadingTickets}>
-          {loadingTickets ? 'Loading...' : 'Refresh Tickets'}
+        <button
+          className="btn btn-secondary"
+          onClick={fetchTickets}
+          disabled={loading}
+        >
+          {loading ? 'Refreshing...' : 'Refresh Tickets'}
         </button>
       </div>
 
@@ -91,15 +137,15 @@ const TicketList: React.FC = () => {
             >
               <div className="card-body p-4">
                 <h3 className="card-title text-xl font-semibold mb-2">Ticket ID: {ticket.id}</h3>
-                <p className="text-gray-600">Event: {ticket.eventName || 'Unknown Event'}</p>
-                <p className="text-gray-600">Date: {ticket.date || 'TBA'}</p>
+                <p className="text-gray-600">Event: {ticket.eventName}</p>
+                <p className="text-gray-600">Date: {ticket.date}</p>
                 <p className="mt-2 text-sm text-gray-500">This is your verified NFT ticket on Algorand.</p>
               </div>
             </div>
           ))}
         </div>
       ) : (
-        !loadingTickets && <p className="text-center text-gray-500 mt-6">No tickets found. Buy one from events!</p>
+        !loading && <p className="text-center text-gray-500 mt-6">No tickets found. Buy one from events!</p>
       )}
     </div>
   )

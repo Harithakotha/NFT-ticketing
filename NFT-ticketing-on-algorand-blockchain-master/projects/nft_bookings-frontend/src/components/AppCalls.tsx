@@ -1,4 +1,3 @@
-// src/components/AppCalls.tsx
 import { useWallet } from '@txnlab/use-wallet-react'
 import { useSnackbar } from 'notistack'
 import React, { useState, useMemo } from 'react'
@@ -8,15 +7,17 @@ import {
   getIndexerConfigFromViteEnvironment
 } from '../utils/network/getAlgoClientConfigs'
 import { AlgorandClient } from '@algorandfoundation/algokit-utils'
+import algosdk from 'algosdk'
+import { CONFIG } from '../config'
 
-interface AppCallsInterface {
+interface AppCallsProps {
   openModal: boolean
   setModalState: (value: boolean) => void
 }
 
 type ActionType = 'hello' | 'createEvent' | 'bookTicket' | 'getMyTickets'
 
-const AppCalls = ({ openModal, setModalState }: AppCallsInterface) => {
+const AppCalls = ({ openModal, setModalState }: AppCallsProps) => {
   const [loading, setLoading] = useState(false)
   const [contractInput, setContractInput] = useState('')
   const [eventName, setEventName] = useState('')
@@ -28,7 +29,7 @@ const AppCalls = ({ openModal, setModalState }: AppCallsInterface) => {
   const { transactionSigner, activeAddress } = useWallet()
 
   // --------------------------
-  // Safe Algorand client init
+  // Memoized Algorand client
   // --------------------------
   const algorand = useMemo(() => {
     if (!transactionSigner || !activeAddress) return null
@@ -40,18 +41,36 @@ const AppCalls = ({ openModal, setModalState }: AppCallsInterface) => {
     return client
   }, [transactionSigner, activeAddress])
 
+  const algodClient = useMemo(() => {
+    if (!transactionSigner || !activeAddress) return null
+    const algodConfig = getAlgodConfigFromViteEnvironment()
+    return new algosdk.Algodv2(
+      algodConfig.token || '',
+      algodConfig.server,
+      algodConfig.port
+    )
+  }, [transactionSigner, activeAddress])
+
   const sendAppCall = async () => {
     if (!algorand || !activeAddress || !transactionSigner) {
       enqueueSnackbar('Please connect your wallet first', { variant: 'warning' })
       return
     }
 
-    setLoading(true)
+    // Basic input validation
+    if (action === 'createEvent' && (!eventName || !eventDate)) {
+      enqueueSnackbar('Please provide event name and date', { variant: 'warning' })
+      return
+    }
+    if (action === 'bookTicket' && !eventId) {
+      enqueueSnackbar('Please provide an Event ID', { variant: 'warning' })
+      return
+    }
 
+    setLoading(true)
     try {
-      const appId = 123456 // Replace with your deployed app ID
-      const factory = new NftBookingsFactory(algorand.algod, activeAddress, transactionSigner)
-      const appClient = factory.getClient(appId)
+      const factory = new NftBookingsFactory(algodClient, activeAddress, transactionSigner)
+      const appClient = factory.getClient(CONFIG.APP_ID)
 
       let response
       switch (action) {
@@ -63,15 +82,27 @@ const AppCalls = ({ openModal, setModalState }: AppCallsInterface) => {
         case 'createEvent':
           response = await appClient.createEvent(eventName, eventDate)
           enqueueSnackbar(`Event created: ID ${response.returnValue}`, { variant: 'success' })
+          setEventName('')
+          setEventDate('')
           break
 
         case 'bookTicket':
-          if (!eventId) {
-            enqueueSnackbar('Please provide an Event ID', { variant: 'warning' })
-            break
-          }
-          response = await appClient.bookTicket(Number(eventId))
+          // Get ticket price and create payment transaction
+          const priceResponse = await appClient.getTicketPrice()
+          const ticketPrice = Number(priceResponse.returnValue)
+
+          // Create payment transaction
+          const suggestedParams = await algodClient.getTransactionParams().do()
+          const paymentTxn = algosdk.makePaymentTxnWithSuggestedParamsFromObject({
+            sender: activeAddress,
+            receiver: algosdk.getApplicationAddress(CONFIG.APP_ID),
+            amount: ticketPrice,
+            suggestedParams,
+          })
+
+          response = await appClient.bookTicket(Number(eventId), paymentTxn)
           enqueueSnackbar(`Ticket booked: ID ${response.returnValue}`, { variant: 'success' })
+          setEventId('')
           break
 
         case 'getMyTickets':
@@ -84,20 +115,25 @@ const AppCalls = ({ openModal, setModalState }: AppCallsInterface) => {
       }
     } catch (e: any) {
       console.error('App call error:', e)
-      enqueueSnackbar(`Error calling contract: ${e.message || e}`, { variant: 'error' })
+      enqueueSnackbar(`Error calling contract: ${e?.message || e}`, { variant: 'error' })
     } finally {
       setLoading(false)
     }
   }
 
+  // --------------------------
+  // Disable send if inputs are invalid
+  // --------------------------
+  const isSendDisabled =
+    loading ||
+    !activeAddress ||
+    (action === 'createEvent' && (!eventName || !eventDate)) ||
+    (action === 'bookTicket' && !eventId)
+
   return (
-    <dialog
-      id="appcalls_modal"
-      className={`modal ${openModal ? 'modal-open' : ''} bg-slate-200`}
-      style={{ display: openModal ? 'block' : 'none' }}
-    >
+    <dialog className={`modal ${openModal ? 'modal-open' : ''}`} open={openModal}>
       <form method="dialog" className="modal-box" onSubmit={(e) => e.preventDefault()}>
-        <h3 className="font-bold text-lg">Interact with NFT Bookings Contract</h3>
+        <h3 className="font-bold text-lg mb-4">Interact with NFT Bookings Contract</h3>
 
         <select
           className="select select-bordered w-full mb-4"
@@ -148,17 +184,15 @@ const AppCalls = ({ openModal, setModalState }: AppCallsInterface) => {
           />
         )}
 
-        <div className="modal-action grid gap-2">
-          <button type="button" className="btn" onClick={() => setModalState(false)}>
-            Close
-          </button>
+        <div className="modal-action">
+          <button type="button" className="btn" onClick={() => setModalState(false)}>Close</button>
           <button
             type="button"
-            className={`btn`}
+            className={`btn btn-primary ${loading ? 'loading' : ''}`}
             onClick={sendAppCall}
-            disabled={loading || !activeAddress}
+            disabled={isSendDisabled}
           >
-            {loading ? <span className="loading loading-spinner" /> : 'Send Application Call'}
+            {loading ? 'Processing...' : 'Send'}
           </button>
         </div>
       </form>

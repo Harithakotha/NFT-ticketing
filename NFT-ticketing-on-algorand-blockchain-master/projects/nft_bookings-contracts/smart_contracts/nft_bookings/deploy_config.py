@@ -24,14 +24,15 @@ def deploy() -> None:
         on_schema_break=algokit_utils.OnSchemaBreak.AppendApp,
     )
 
-    
+
     if result.operation_performed in [
         algokit_utils.OperationPerformed.Create,
         algokit_utils.OperationPerformed.Replace,
     ]:
+        # Fund the contract with more Algo for NFT creation and operations
         algorand.send.payment(
             algokit_utils.PaymentParams(
-                amount=algokit_utils.AlgoAmount(algo=1),
+                amount=algokit_utils.AlgoAmount(algo=10),  # Increased funding for NFT operations
                 sender=deployer_.address,
                 receiver=app_client.app_address,
             )
@@ -43,3 +44,7 @@ def deploy() -> None:
         f"Called hello on {app_client.app_name} ({app_client.app_id}) "
         f"with name={name}, received: {response.abi_return}"
     )
+
+    # Test ticket price retrieval
+    price_response = app_client.send.get_ticket_price()
+    logger.info(f"Ticket price: {price_response.abi_return} microAlgos")

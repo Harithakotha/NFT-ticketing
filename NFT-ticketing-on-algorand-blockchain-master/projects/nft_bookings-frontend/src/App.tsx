@@ -3,31 +3,33 @@ import { SnackbarProvider } from 'notistack'
 import Home from './Home'
 import { getAlgodConfigFromViteEnvironment, getKmdConfigFromViteEnvironment } from './utils/network/getAlgoClientConfigs'
 
-let supportedWallets: SupportedWallet[]
-if (import.meta.env.VITE_ALGOD_NETWORK === 'localnet') {
-  const kmdConfig = getKmdConfigFromViteEnvironment()
-  supportedWallets = [
-    {
-      id: WalletId.KMD,
-      options: {
-        baseServer: kmdConfig.server,
-        token: String(kmdConfig.token),
-        port: String(kmdConfig.port),
+const getSupportedWallets = (): SupportedWallet[] => {
+  if (import.meta.env.VITE_ALGOD_NETWORK === 'localnet') {
+    const kmdConfig = getKmdConfigFromViteEnvironment()
+    return [
+      {
+        id: WalletId.KMD,
+        options: {
+          baseServer: kmdConfig.server,
+          token: String(kmdConfig.token),
+          port: String(kmdConfig.port),
+        },
       },
-    },
-  ]
-} else {
-  supportedWallets = [
+    ]
+  }
+
+  return [
     { id: WalletId.DEFLY },
     { id: WalletId.PERA },
     { id: WalletId.EXODUS },
-    // If you are interested in WalletConnect v2 provider
-    // refer to https://github.com/TxnLab/use-wallet for detailed integration instructions
+    // If you want to integrate WalletConnect v2, follow the docs:
+    // https://github.com/TxnLab/use-wallet
   ]
 }
 
 export default function App() {
   const algodConfig = getAlgodConfigFromViteEnvironment()
+  const supportedWallets = getSupportedWallets()
 
   const walletManager = new WalletManager({
     wallets: supportedWallets,
@@ -41,9 +43,7 @@ export default function App() {
         },
       },
     },
-    options: {
-      resetNetwork: true,
-    },
+    options: { resetNetwork: true },
   })
 
   return (
