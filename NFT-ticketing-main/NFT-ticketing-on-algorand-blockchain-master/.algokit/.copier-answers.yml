@@ -1,0 +1,10 @@
+# Changes here will be overwritten by Copier; NEVER EDIT MANUALLY
+_commit: 2.1.6
+_src_path:  gh:algorandfoundation/algokit-fullstack-template
+author_email:  kothaharitharao@gmail.com
+author_name: Harithakotha
+contract_name: nft_bookings
+deployment_language: python
+preset_name: starter
+project_name:  nft_bookings
+
