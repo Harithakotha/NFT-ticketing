@@ -1,8 +1,9 @@
-#### usecases for nft-ticketing
+
 ##  Overview
 This project is a blockchain-based ticketing platform that uses Algorand Standard Assets (ASAs) to mint event tickets as Non-Fungible Tokens (NFTs). Each ticket becomes a unique, verifiable digital asset stored on the Algorand blockchain, ensuring security, transparency, and prevention of fraud or duplicate tickets.
 
 The system includes a frontend interface built with TypeScript and supporting Python scripts for asset handling. It allows users to:
+## use cases 
 ## 1. Event Ticketing
 
 -Issue tickets as Algorand Standard Assets (NFTs).
